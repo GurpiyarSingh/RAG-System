@@ -1,0 +1,44 @@
+# =============================================================================
+# Dev overrides, loaded automatically by `docker compose up`.
+# Skipped with `docker compose -f compose.yaml ...` (prod-like mode).
+#
+# Hot reload uses Compose Watch (`docker compose watch`, or `up --watch`) instead of
+# bind mounts: on Windows, bind mounts into Linux containers are slow and miss file
+# events. Watch syncs only changed files into the container.
+# =============================================================================
+x-watch: &watch
+  develop:
+    watch:
+      - action: sync
+        path: ./src
+        target: /app/src
+      # Dependency changes need a new image layer.
+      - action: rebuild
+        path: uv.lock
+
+services:
+  rag-api:
+    <<: *watch
+    command: ["api", "--port", "8000", "--reload"]
+    environment:
+      RAG_LOG_FORMAT: console
+
+  rag-query:
+    <<: *watch
+    command: ["query", "--port", "8001", "--reload"]
+    environment:
+      RAG_LOG_FORMAT: console
+
+  index-worker:
+    develop:
+      watch:
+        # Workers don't auto-reload; restart the container on code changes instead.
+        - action: sync+restart
+          path: ./src
+          target: /app/src
+    environment:
+      RAG_LOG_FORMAT: console
+
+  parse-worker:
+    environment:
+      RAG_LOG_FORMAT: console

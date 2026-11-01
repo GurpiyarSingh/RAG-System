@@ -1,0 +1,41 @@
+# =============================================================================
+# End-to-end test overlay: points the app at a fake OpenAI server, so e2e tests
+# (and CI) need no API key and cost nothing.
+#
+#   docker compose -f compose.yaml -f compose.e2e.yaml up -d --build --wait
+#   uv run poe e2e
+# =============================================================================
+x-fake-openai-env: &fake-openai-env
+  RAG_OPENAI_BASE_URL: http://fake-openai:8080/v1
+  OPENAI_API_KEY: sk-fake-e2e-key
+
+services:
+  fake-openai:
+    # Reuses the app image (it already has FastAPI + uvicorn), so no extra image build.
+    image: rag-service:local
+    entrypoint: ["uvicorn", "app:app", "--app-dir", "/srv", "--host", "0.0.0.0", "--port", "8080", "--log-level", "warning"]
+    command: []
+    volumes: ["./tests/e2e/fake_openai:/srv:ro"]
+    networks: [rag-net]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  bootstrap:
+    environment: *fake-openai-env
+  rag-api:
+    environment: *fake-openai-env
+    depends_on:
+      fake-openai: { condition: service_healthy }
+  rag-query:
+    environment: *fake-openai-env
+    depends_on:
+      fake-openai: { condition: service_healthy }
+  index-worker:
+    environment: *fake-openai-env
+    depends_on:
+      fake-openai: { condition: service_healthy }
+  parse-worker:
+    environment: *fake-openai-env

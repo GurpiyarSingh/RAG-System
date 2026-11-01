@@ -1,0 +1,1 @@
+- Ensure proper and meaningful comments are added throughout the codebase to improve code readability, maintainability, and understanding.

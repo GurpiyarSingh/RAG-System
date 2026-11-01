@@ -1,0 +1,158 @@
+[project]
+name = "rag-service"
+version = "0.1.0"
+description = "Enterprise multi-tenant Retrieval-Augmented Generation service"
+readme = "README.md"
+authors = [{ name = "Gurpiyar Singh" }]
+# Python 3.14 everywhere: it is the interpreter already installed on the dev machine (no extra
+# Python downloads) and the base of the container images (deploy/docker/Dockerfile).
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    # --- web / API ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sse-starlette>=2.1",
+    "python-multipart>=0.0.12",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "typer>=0.12",
+    # --- persistence ---
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "redis>=5.2",
+    "qdrant-client>=1.12",
+    "aioboto3>=13.2",
+    # --- workflows ---
+    "temporalio>=1.8",
+    # --- models ---
+    "openai>=1.55",
+    "tiktoken>=0.8",
+    # --- utilities ---
+    "httpx>=0.27",
+    "tenacity>=9.0",
+    "structlog>=24.4",
+    "filetype>=1.2",
+]
+
+[project.optional-dependencies]
+# Heavy document-parsing stack. Installed only in the rag-parser image (parse-worker),
+# so the API/query image stays small. See docs/IMPLEMENTATION_PLAN.md §3.1.
+parser = [
+    "docling>=2.15",
+    # Listed explicitly so [tool.uv.sources] can pin them to the CPU-only PyTorch index.
+    # The default Linux wheels bundle CUDA (~3 GB) that this CPU-only worker never uses.
+    "torch>=2.9",
+    "torchvision>=0.24",
+]
+
+[project.scripts]
+rag-service = "rag_service.main:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "respx>=0.21",
+    "hypothesis>=6.115",
+    "testcontainers[postgres,redis,minio]>=4.8",
+    "fakeredis[lua]>=2.26",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "poethepoet>=0.31",
+    "pre-commit>=4.0",
+    "types-aioboto3[s3]>=13.2",
+    # Keeps the repo-local uv (installed into .venv) from being removed by `uv sync`.
+    "uv>=0.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_service"]
+
+# ---------------------------------------------------------------------------
+# uv: keep everything inside the repo and never touch global Python installations.
+# ---------------------------------------------------------------------------
+[tool.uv]
+cache-dir = ".uv-cache"        # repo-local instead of the per-user cache in AppData
+python-downloads = "never"     # use the existing interpreter only
+python-preference = "only-system"
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "RUF", "S", "PT"]
+ignore = [
+    "S101",   # assert is fine in tests and for type narrowing
+    "B008",   # FastAPI's Depends() in argument defaults is idiomatic
+    "RUF012", # mutable class attrs are used by SQLAlchemy/Pydantic declaratively
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311"]
+"migrations/**" = ["E501"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+packages = ["rag_service"]
+# Third-party libs without complete stubs.
+[[tool.mypy.overrides]]
+module = ["aioboto3.*", "asyncpg.*", "docling.*", "docling_core.*", "filetype.*", "tiktoken.*", "testcontainers.*", "fakeredis.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+markers = [
+    "integration: needs Docker (Testcontainers) or the local test database",
+    "e2e: runs against a live docker compose stack (uv run poe e2e)",
+    "live: calls the real OpenAI API; costs money, run on demand only",
+]
+addopts = "-m 'not e2e and not live'"
+
+# ---------------------------------------------------------------------------
+# Task runner: `uv run poe <task>` works the same on Windows, macOS and Linux.
+# ---------------------------------------------------------------------------
+[tool.poe.tasks]
+up = { cmd = "docker compose up -d --build --wait", help = "Start the dev stack (hot reload)" }
+up-prod = { cmd = "docker compose -f compose.yaml up -d --build --wait", help = "Start the prod-like stack" }
+down = { cmd = "docker compose down", help = "Stop the stack (keeps data volumes)" }
+logs = { cmd = "docker compose logs -f --tail=200", help = "Follow container logs" }
+migrate = { cmd = "docker compose run --rm migrate", help = "Apply database migrations" }
+db-init = { cmd = "python scripts/db/init_local.py", help = "One-time setup of roles/databases on the local PostgreSQL" }
+db-check = { cmd = "rag-service db-check", help = "Verify database connectivity and role safety" }
+lint = { sequence = [
+    { cmd = "ruff check src tests migrations scripts" },
+    { cmd = "ruff format --check src tests migrations scripts" },
+    { cmd = "mypy" },
+], help = "Lint, format check and type check" }
+fmt = { sequence = [{ cmd = "ruff format src tests migrations scripts" }, { cmd = "ruff check --fix src tests migrations scripts" }], help = "Auto-format code" }
+test = { cmd = "pytest", help = "Unit + integration tests" }
+unit = { cmd = "pytest tests/unit", help = "Unit tests only (no Docker needed)" }
+e2e-up = { cmd = "docker compose -f compose.yaml -f compose.e2e.yaml up -d --build --wait", help = "Start the stack wired to the fake OpenAI server" }
+e2e = { cmd = "pytest -m e2e tests/e2e", help = "End-to-end tests against the running stack" }
+seed = { cmd = "python scripts/seed.py", help = "Create a demo tenant, KB, API key and ingest sample docs" }

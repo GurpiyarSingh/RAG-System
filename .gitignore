@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# repo-local uv cache (see [tool.uv] in pyproject.toml)
+.uv-cache/

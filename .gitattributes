@@ -1,0 +1,13 @@
+# Normalize line endings to LF in the repo. CRLF shell scripts or entrypoints
+# break inside Linux containers ("/bin/sh^M: bad interpreter").
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Binary fixtures must never be touched.
+*.pdf binary
+*.docx binary
+*.png binary
+*.jpg binary
