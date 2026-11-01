@@ -31,6 +31,8 @@ STACK_PORTS = {
 MIN_DOCKER_MEMORY_GB = 6
 RECOMMENDED_DOCKER_MEMORY_GB = 8
 MIN_FREE_DISK_GB = 20
+DEFAULT_PG_BIN = r"D:\C Drive\PostgreSQL\bin"
+WSLCONFIG_HINT = r"%UserProfile%\.wslconfig"
 
 failures = 0
 
@@ -49,7 +51,9 @@ def report(status: str, name: str, detail: str = "", hint: str = "") -> None:
 
 def run(cmd: list[str], timeout: int = 20) -> tuple[int, str]:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)  # noqa: S603
+        out = subprocess.run(  # noqa: S603 - fixed argument lists, no shell
+            cmd, capture_output=True, text=True, timeout=timeout, check=False
+        )
         return out.returncode, (out.stdout + out.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, str(exc)
@@ -91,7 +95,12 @@ def check_docker() -> bool:
         return False
     code, out = run(["docker", "version", "--format", "{{.Server.Version}}"])
     if code != 0:
-        report("FAIL", "Docker engine", "not running", "Start Docker Desktop and wait until it says 'Engine running'.")
+        report(
+            "FAIL",
+            "Docker engine",
+            "not running",
+            "Start Docker Desktop and wait until it says 'Engine running'.",
+        )
         return False
     report("PASS", "Docker engine", f"version {out}")
 
@@ -99,7 +108,12 @@ def check_docker() -> bool:
     if code == 0:
         report("PASS", "Docker Compose", f"version {out}")
     else:
-        report("FAIL", "Docker Compose", "plugin missing", "Update Docker Desktop (Compose v2 is included).")
+        report(
+            "FAIL",
+            "Docker Compose",
+            "plugin missing",
+            "Update Docker Desktop (Compose v2 is included).",
+        )
 
     code, out = run(["docker", "info", "--format", "{{json .MemTotal}}"])
     if code == 0 and out.strip().isdigit():
@@ -107,28 +121,46 @@ def check_docker() -> bool:
         if gb >= RECOMMENDED_DOCKER_MEMORY_GB - 0.5:
             report("PASS", "Docker memory", f"{gb:.1f} GB")
         elif gb >= MIN_DOCKER_MEMORY_GB - 0.5:
-            report("WARN", "Docker memory", f"{gb:.1f} GB (8 GB recommended)",
-                   "Raise 'memory=' under [wsl2] in %UserProfile%\\.wslconfig, then run 'wsl --shutdown'.")
+            report(
+                "WARN",
+                "Docker memory",
+                f"{gb:.1f} GB (8 GB recommended)",
+                f"Raise 'memory=' under [wsl2] in {WSLCONFIG_HINT}, then run 'wsl --shutdown'.",
+            )
         else:
-            report("FAIL", "Docker memory", f"{gb:.1f} GB, at least {MIN_DOCKER_MEMORY_GB} GB needed",
-                   "Set 'memory=8GB' under [wsl2] in %UserProfile%\\.wslconfig, then run 'wsl --shutdown' and restart Docker Desktop.")
+            report(
+                "FAIL",
+                "Docker memory",
+                f"{gb:.1f} GB, at least {MIN_DOCKER_MEMORY_GB} GB needed",
+                f"Set 'memory=8GB' under [wsl2] in {WSLCONFIG_HINT}, "
+                "then run 'wsl --shutdown' and restart Docker Desktop.",
+            )
     return True
 
 
 def check_postgres(env: dict[str, str]) -> None:
-    pg_bin = env.get("RAG_PG_BIN") or os.environ.get("RAG_PG_BIN") or r"D:\C Drive\PostgreSQL\bin"
+    pg_bin = env.get("RAG_PG_BIN") or os.environ.get("RAG_PG_BIN") or DEFAULT_PG_BIN
     psql = Path(pg_bin) / ("psql.exe" if os.name == "nt" else "psql")
     found = str(psql) if psql.exists() else shutil.which("psql")
     if not found:
-        report("FAIL", "psql", "not found",
-               "Install PostgreSQL 18, or set RAG_PG_BIN in .env to its 'bin' folder.")
+        report(
+            "FAIL",
+            "psql",
+            "not found",
+            "Install PostgreSQL 18, or set RAG_PG_BIN in .env to its 'bin' folder.",
+        )
     else:
-        code, out = run([found, "--version"])
+        _code, out = run([found, "--version"])
         major = next((int(p.split(".")[0]) for p in out.split() if p[:1].isdigit()), 0)
         if major >= 18:
             report("PASS", "PostgreSQL client", out)
         else:
-            report("FAIL", "PostgreSQL client", out or "unknown version", "PostgreSQL 18 or newer is required (uuidv7()).")
+            report(
+                "FAIL",
+                "PostgreSQL client",
+                out or "unknown version",
+                "PostgreSQL 18 or newer is required (uuidv7()).",
+            )
 
     host = env.get("RAG_DB_HOST", "127.0.0.1")
     port = int(env.get("RAG_DB_PORT", "5432"))
@@ -137,18 +169,31 @@ def check_postgres(env: dict[str, str]) -> None:
         if sock.connect_ex((host, port)) == 0:
             report("PASS", "PostgreSQL server", f"listening on {host}:{port}")
         else:
-            report("FAIL", "PostgreSQL server", f"nothing listening on {host}:{port}",
-                   "Start the 'postgresql-x64-18' service (Win+R → services.msc).")
+            report(
+                "FAIL",
+                "PostgreSQL server",
+                f"nothing listening on {host}:{port}",
+                "Start the 'postgresql-x64-18' service (Win+R → services.msc).",
+            )
 
 
 def check_ports() -> None:
     # Ports used by our own running stack are fine; anything else on them is a conflict.
     code, out = run(["docker", "ps", "--format", "{{json .Ports}}"])
     ours = out if code == 0 else ""
-    busy = [f"{p} ({name})" for p, name in STACK_PORTS.items() if port_in_use(p) and f":{p}->" not in ours]
+    busy = [
+        f"{p} ({name})"
+        for p, name in STACK_PORTS.items()
+        if port_in_use(p) and f":{p}->" not in ours
+    ]
     if busy:
-        report("FAIL", "Free ports", "in use: " + ", ".join(busy),
-               "Stop the program using that port (netstat -ano | findstr :<port>), or change it in compose.yaml.")
+        report(
+            "FAIL",
+            "Free ports",
+            "in use: " + ", ".join(busy),
+            "Stop the program using that port (netstat -ano | findstr :<port>), "
+            "or change it in compose.yaml.",
+        )
     else:
         report("PASS", "Free ports", ", ".join(str(p) for p in STACK_PORTS))
 
@@ -158,7 +203,11 @@ def check_disk() -> None:
     if free_gb >= MIN_FREE_DISK_GB:
         report("PASS", "Disk space", f"{free_gb:.0f} GB free")
     else:
-        report("WARN", "Disk space", f"{free_gb:.0f} GB free ({MIN_FREE_DISK_GB} GB recommended for images)")
+        report(
+            "WARN",
+            "Disk space",
+            f"{free_gb:.0f} GB free ({MIN_FREE_DISK_GB} GB recommended for images)",
+        )
 
 
 def check_internet() -> None:
@@ -168,7 +217,12 @@ def check_internet() -> None:
             socket.create_connection((host, 443), timeout=5).close()
             ok.append(host)
         except OSError:
-            report("WARN", "Internet", f"cannot reach {host}", "Needed to download packages/images and to call OpenAI.")
+            report(
+                "WARN",
+                "Internet",
+                f"cannot reach {host}",
+                "Needed to download packages/images and to call OpenAI.",
+            )
     if len(ok) == 3:
         report("PASS", "Internet", "PyPI, Docker Hub and OpenAI reachable")
 
@@ -180,8 +234,12 @@ def check_project_files(env: dict[str, str]) -> None:
     report("PASS", ".env", "present")
     key = env.get("OPENAI_API_KEY", "")
     if not key or "your-openai-key" in key:
-        report("WARN", "OpenAI key", "placeholder",
-               "The stack runs, but questions fail with 503 until you set OPENAI_API_KEY in .env.")
+        report(
+            "WARN",
+            "OpenAI key",
+            "placeholder",
+            "The stack runs, but questions fail with 503 until you set OPENAI_API_KEY in .env.",
+        )
     else:
         report("PASS", "OpenAI key", "set")
     venv_python = ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
@@ -203,7 +261,9 @@ def main() -> None:
     check_project_files(env)
     print()
     if failures:
-        print(f"{failures} check(s) FAILED. Fix them (see the hints above) and run this script again.")
+        print(
+            f"{failures} check(s) FAILED. Fix them (see the hints above) and run this script again."
+        )
         sys.exit(1)
     print("All required checks passed. You're ready to continue with the setup guide.")
 

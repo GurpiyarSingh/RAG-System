@@ -90,10 +90,16 @@ services:
   temporal:
     # Temporal dev server: workflow engine + Web UI (http://localhost:8233), SQLite file
     # on a volume so workflow history survives restarts.
+    #
+    # The image runs as the non-root user `temporal` (UID 1000). The volume is mounted
+    # on that user's home directory because a new named volume inherits the ownership
+    # of the image directory it's mounted over. A path that doesn't exist in the image
+    # (e.g. /data) gets created root-owned, and SQLite then fails with
+    # "unable to open database file" (error 14).
     image: temporalio/temporal:1.8.3
-    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/data/temporal.db", "--ui-port", "8233"]
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/home/temporal/temporal.db", "--ui-port", "8233"]
     ports: ["127.0.0.1:7233:7233", "127.0.0.1:8233:8233"]
-    volumes: ["temporal_data:/data"]
+    volumes: ["temporal_data:/home/temporal"]
     healthcheck:
       test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
       interval: 5s
